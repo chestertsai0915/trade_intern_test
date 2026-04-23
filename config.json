@@ -1,0 +1,22 @@
+{
+    "system": {
+        "mode": "TESTNET", 
+        "paper_trading": false,
+        "log_level": "INFO"
+    },
+    "trading": {
+        "symbol": "BTCUSDT",
+        "interval": "1h",
+        "strategies": ["PriceVolume1","PriceVolume2","PriceVolume3","PriceVolume4","PriceVolume5","PriceVolume6","PriceVolume7","PriceVolume8","PriceVolume9","SentimentStrategyV3","SentimentStrategyV2","PriceVolume10","QQQ_price"]
+    },
+    "risk": {
+        "leverage": 1,
+        "allocation_mode": "SHARPE_REBALANCE",
+        "total_strategies": 13,
+        "default_amount": 100, 
+        "strategy_allocations": {
+            "PriceVolume2": 100, 
+            "PriceVolume3": 100
+        }
+    }
+}
