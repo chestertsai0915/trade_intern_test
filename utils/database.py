@@ -8,7 +8,7 @@ import logging
 import pandas as pd 
 
 class DatabaseHandler:
-    def __init__(self, db_path="trading_data.db", skip_backup=False):
+    def __init__(self, db_path="trading_data.db", skip_backup=True):
         self.db_path = db_path
         
         # =建立持久連線，並允許跨執行緒存取
@@ -498,3 +498,84 @@ class DatabaseHandler:
         except Exception as e:
             logging.error(f"[DB Error] 批量讀取策略狀態失敗: {e}")
             return {}
+        
+    def get_existing_timestamps(self, symbol, interval, start_ts, end_ts):
+        """
+        查詢資料庫，回傳指定區間內已存在的所有 K 線 open_time (毫秒整數列表)
+        """
+        try:
+            cursor = self.conn.cursor()
+            
+            # 針對 market_data 表進行查詢
+            query = '''
+                SELECT open_time 
+                FROM market_data 
+                WHERE symbol = ? AND interval = ? AND open_time >= ? AND open_time <= ?
+            '''
+            cursor.execute(query, (symbol, interval, start_ts, end_ts))
+            
+            # fetchall() 會回傳類似 [(1709251200000,), (1709251260000,)] 的 tuple 列表
+            results = cursor.fetchall()
+            
+            # 透過列表推導式，將其轉換為單純的整數列表 [1709251200000, 1709251260000]
+            return [row[0] for row in results]
+            
+        except Exception as e:
+            logging.error(f" [DB ERROR] 查詢已存在時間戳失敗: {e}")
+            return []
+
+    def insert_klines(self, symbol, interval, df):
+        """
+        將 DataFrame 寫入資料庫
+        使用 "INSERT OR IGNORE" 以防止不小心寫入重複資料
+        """
+        if df.empty:
+            return
+
+        try:
+            cursor = self.conn.cursor()
+            df_to_save = df.copy()
+            
+            # 1. 欄位名稱防呆對齊
+            if 'open_time' not in df_to_save.columns:
+                rename_map = {'timestamp': 'open_time', 'Date': 'open_time', 'date': 'open_time', 'index': 'open_time'}
+                df_to_save.rename(columns=rename_map, inplace=True)
+            if 'Close time' in df_to_save.columns:
+                df_to_save.rename(columns={'Close time': 'close_time'}, inplace=True)
+
+            # 2. 轉換 open_time 為毫秒整數
+            if pd.api.types.is_numeric_dtype(df_to_save['open_time']):
+                df_to_save['open_time'] = pd.to_datetime(df_to_save['open_time'], unit='ms')
+            if not pd.api.types.is_datetime64_any_dtype(df_to_save['open_time']):
+                df_to_save['open_time'] = pd.to_datetime(df_to_save['open_time'])
+            
+            df_to_save['open_time'] = df_to_save['open_time'].astype('int64') // 10**6
+
+            # 3. 處理 close_time (如果有)
+            if 'close_time' in df_to_save.columns:
+                if pd.api.types.is_numeric_dtype(df_to_save['close_time']):
+                    df_to_save['close_time'] = pd.to_datetime(df_to_save['close_time'], unit='ms')
+                if not pd.api.types.is_datetime64_any_dtype(df_to_save['close_time']):
+                    df_to_save['close_time'] = pd.to_datetime(df_to_save['close_time'])
+                df_to_save['close_time'] = df_to_save['close_time'].astype('int64') // 10**6
+            else:
+                df_to_save['close_time'] = 0
+
+            # 4. 轉為 List of Tuples 並加上 symbol 與 interval
+            data_to_insert = list(df_to_save[[
+                'open_time', 'open', 'high', 'low', 'close', 'volume', 'close_time'
+            ]].itertuples(index=False, name=None))
+            
+            final_data = [(symbol, interval) + row for row in data_to_insert]
+
+            # 5. 使用 INSERT OR IGNORE 寫入 (遇到重複主鍵直接忽略，不報錯也不覆蓋)
+            cursor.executemany('''
+                INSERT OR IGNORE INTO market_data 
+                (symbol, interval, open_time, open, high, low, close, volume, close_time)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', final_data)
+
+            self.conn.commit()
+            
+        except Exception as e:
+            logging.error(f"[DB ERROR] 寫入市場數據失敗 (insert_klines): {e}")

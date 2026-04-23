@@ -1,4 +1,6 @@
 # 1. 引入所有的 Fetcher
+from data_sources.bybit_source import BybitExternalSource
+
 from .fear_greed import FearGreedFetcher
 from .google_trends import GoogleTrendsFetcher
 from .macro_economic import FredFetcher
@@ -11,6 +13,7 @@ _FETCHER_CLASSES = [
     GoogleTrendsFetcher,
     FredFetcher,
     USStockFetcher,
+    BybitExternalSource
 ]
 
 # 3. 自動生成字典 { "fear_greed": FearGreedFetcherClass, ... }

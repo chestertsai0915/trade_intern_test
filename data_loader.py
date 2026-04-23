@@ -4,17 +4,29 @@ from utils.database import DatabaseHandler
 from pybit.unified_trading import HTTP as BybitHTTP  # 引入 Bybit V5 SDK
 
 class DataLoader:
-    def __init__(self, client: UMFutures,  bybit_client: BybitHTTP = None, db: DatabaseHandler = None):
+    def __init__(self, client: UMFutures, db: DatabaseHandler = None):
         self.client = client
         self.db_handler = db
-        self.bybit_client = bybit_client
         
-    def get_binance_klines(self, symbol, interval, limit=100):
+        
+    def get_binance_klines(self, symbol, interval, limit=1000, startTime=None, endTime=None):
         """ 
-        幣安 K 線抓取，
+        幣安 K 線抓取，支援指定起迄時間
         """
         try:
-            klines = self.client.klines(symbol=symbol, interval=interval, limit=limit)
+            # 將額外參數打包
+            params = {
+                "symbol": symbol,
+                "interval": interval,
+                "limit": limit
+            }
+            if startTime is not None:
+                params["startTime"] = int(startTime)
+            if endTime is not None:
+                params["endTime"] = int(endTime)
+
+            klines = self.client.klines(**params)
+            
             df = pd.DataFrame(klines, columns=[
                 'open_time', 'open', 'high', 'low', 'close', 'volume', 
                 'close_time', 'q_vol', 'trades', 'taker_buy_vol', 'taker_buy_q_vol', 'ignore'
@@ -22,11 +34,11 @@ class DataLoader:
             numeric_cols = ['open', 'high', 'low', 'close', 'volume']
             df[numeric_cols] = df[numeric_cols].astype(float)
             
-            # 確保時間是整數
             return df
         except Exception as e:
             print(f"幣安數據抓取失敗: {e}")
             return pd.DataFrame()
+        
     def get_orderbook_depth(self, symbol, limit=5):
         """
         獲取幣安合約 L2 訂單簿深度數據 (包含 Top 5 Bid/Ask 價格與掛單量)
@@ -57,72 +69,43 @@ class DataLoader:
         except Exception as e:
             print(f"幣安深度數據抓取失敗: {e}")
             return pd.DataFrame()    
-        
-    def get_bybit_klines(self, symbol, interval, limit=100):
+         # ==========================================
+    #  改成從 DB 讀取的方法
+    # ==========================================
+
+    def get_google_trends_from_db(self, limit=1):
+        """ 從 DB 讀取最新的 Google Trends """
+        return self.db.load_external_data(
+            symbol='GLOBAL', 
+            metric='google_trends', 
+            limit=limit
+        )
+
+    def get_fear_and_greed_from_db(self, limit=1):
+        """ 從 DB 讀取恐慌指數 """
+        return self.db.load_external_data(
+            symbol='GLOBAL', 
+            metric='fear_greed', 
+            limit=limit
+        )
+
+    def get_macro_data_from_db(self, limit=1):
         """ 
-        Bybit K 線抓取 
-        Bybit interval 格式：1, 3, 5, 15, 60, D, W, M
+        從 DB 讀取總經數據 
+        因為 metric 有很多種，這裡可以一次讀出來
         """
-        try:
-            # Bybit V5 獲取 K 線
-            response = self.bybit_client.get_kline(
-                category="linear", # U本位合約
-                symbol=symbol,
-                interval=str(interval), 
-                limit=limit
-            )
-            
-            # Bybit 回傳的資料在 result['list'] 中
-            klines = response.get('result', {}).get('list', [])
-            
-            # 【關鍵】Bybit 的資料是「由新到舊」，必須反轉陣列以對齊幣安的「由舊到新」
-            klines = klines[::-1]
-            
-            # Bybit 欄位定義: [startTime, openPrice, highPrice, lowPrice, closePrice, volume, turnover]
-            df = pd.DataFrame(klines, columns=[
-                'open_time', 'open', 'high', 'low', 'close', 'volume', 'turnover'
-            ])
-            
-            numeric_cols = ['open', 'high', 'low', 'close', 'volume']
-            df[numeric_cols] = df[numeric_cols].astype(float)
-            df['open_time'] = df['open_time'].astype(int) # 確保時間為整數毫秒
-            
-            return df
-        except Exception as e:
-            print(f"Bybit K線抓取失敗: {e}")
-            return pd.DataFrame()
+        metrics = ['fed_assets', 'yield_10y', 'yield_2y']
+        results = {}
+        
+        for m in metrics:
+            df = self.db.load_external_data(symbol='US_MACRO', metric=m, limit=limit)
+            if not df.empty:
+                results[m] = df.iloc[-1]['value'] # 取最新一筆
+            else:
+                results[m] = 0
+        return results
 
-    def get_bybit_orderbook_depth(self, symbol, limit=5):
-        """
-        獲取 Bybit 合約 L2 訂單簿深度數據 
-        """
-        try:
-            # 【關鍵】Bybit U本位深度 limit 只能是 1, 50, 200, 500。這裡請求 50 檔。
-            response = self.bybit_client.get_orderbook(
-                category="linear",
-                symbol=symbol,
-                limit=50
-            )
-            
-            result = response.get('result', {})
-            # 利用切片 [:limit] 只取出前 5 檔
-            bids = result.get('b', [])[:limit]
-            asks = result.get('a', [])[:limit]
-            timestamp = result.get('ts')
-            
-            df_depth = pd.DataFrame({
-                'timestamp': int(timestamp),
-                'level': range(1, len(bids) + 1),
-                'bid_price': [float(b[0]) for b in bids],
-                'bid_qty': [float(b[1]) for b in bids],
-                'ask_price': [float(a[0]) for a in asks],
-                'ask_qty': [float(a[1]) for a in asks]
-            })
-            
-            return df_depth
-
-        except Exception as e:
-            print(f"Bybit 深度數據抓取失敗: {e}")
-            return pd.DataFrame()
-
+    def get_qqq_klines_from_db(self, limit=100):
+        """ 從 market_data 表讀取 QQQ """
+        return self.db.load_market_data(symbol='QQQ', interval='1d', limit=limit)
 
