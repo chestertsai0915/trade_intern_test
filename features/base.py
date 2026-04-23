@@ -7,7 +7,7 @@ class BaseFeature(ABC):
     """
     name = "base_feature"
     version = "1.0"
-    frequency = "1h" # 標記這個特徵的時間尺度 (1h, 1d, 5m...)
+    frequency = "1m" # 標記這個特徵的時間尺度 (1h, 1d, 5m...)
     description = ""
 
     @abstractmethod

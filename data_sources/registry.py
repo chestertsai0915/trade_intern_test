@@ -13,7 +13,6 @@ _FETCHER_CLASSES = [
     GoogleTrendsFetcher,
     FredFetcher,
     USStockFetcher,
-    BybitExternalSource
 ]
 
 # 3. 自動生成字典 { "fear_greed": FearGreedFetcherClass, ... }

@@ -13,7 +13,7 @@ except ImportError:
     pass
 
 class ResearchEnvironment:
-    def __init__(self, strategy_file, symbol="BTCUSDT", interval="1h", split_date="2025-06-01"):
+    def __init__(self, strategy_file, symbol="BTCUSDT", interval="1m", split_date="2025-06-01"):
         self.split_date = pd.to_datetime(split_date)
         
         # 1. 載入策略

@@ -383,7 +383,7 @@ def main():
     # 2. 準備原始數據
     try:
         factory = BacktestDataFactory()
-        df = factory.prepare_features("BTCUSDT", "1h", feature_ids=requirements)
+        df = factory.prepare_features("BTCUSDT", "1m", feature_ids=requirements)
         print(f"[BRAIN] 原始特徵載入完成，共 {len(df)} 筆。")
     except Exception as e:
         print(f"[Error] 數據準備失敗: {e}")
