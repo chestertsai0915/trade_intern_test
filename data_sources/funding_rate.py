@@ -1,3 +1,4 @@
+#funding_rate.py
 from .base_source import BaseDataSource
 import pandas as pd
 import os
@@ -12,7 +13,7 @@ class FundingRateFetcher(BaseDataSource):
         # 自己建立連線
         self.client = UMFutures(key=key, secret=secret)
 
-    def fetch_data(self, symbol="BTCUSDT", limit=100):
+    def fetch_data(self, symbol="BTCUSDT", limit=200):
         try:
             # 1. 呼叫 API
             data = self.client.funding_rate(symbol=symbol, limit=limit)
