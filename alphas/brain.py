@@ -370,6 +370,10 @@ def load_strategy_from_file(filepath):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('strategy_file', type=str)
+    # 新增接收時間參數
+    parser.add_argument('--start', type=str, default=None, help='回測起始時間 (YYYY-MM-DD)')
+    parser.add_argument('--end', type=str, default=None, help='回測結束時間 (YYYY-MM-DD)')
+    parser.add_argument('--split', type=str, default=None, help='樣本外切分點 (YYYY-MM-DD)')
     args = parser.parse_args()
 
     # 1. 載入策略類別與特徵需求
@@ -380,37 +384,54 @@ def main():
         print(f"[Error] {e}")
         return
 
-    # 2. 準備原始數據
+    # 2. 準備原始數據 (傳入 start_time 與 end_time)
     try:
         factory = BacktestDataFactory()
-        df = factory.prepare_features("BTCUSDT", "1m", feature_ids=requirements)
-        print(f"[BRAIN] 原始特徵載入完成，共 {len(df)} 筆。")
+        # 注意：這裡使用 1m (根據你之前的需求修改)
+        df = factory.prepare_features(
+            symbol="BTCUSDT", 
+            interval="1m", 
+            feature_ids=requirements,
+            start_time=args.start,  # 傳入起始時間
+            end_time=args.end       # 傳入結束時間
+        )
+        if df.empty:
+            print("[Error] 在指定的時間範圍內找不到任何數據。")
+            return
+        print(f"[BRAIN] 原始特徵載入完成，共 {len(df)} 筆。 (範圍: {df['datetime'].iloc[0]} ~ {df['datetime'].iloc[-1]})")
     except Exception as e:
         print(f"[Error] 數據準備失敗: {e}")
         return
 
     # 3. 實例化策略並進行動態加工
     print("[BRAIN] 實例化策略並進行動態特徵加工 (On-the-fly Calculation)...")
-    strategy_instance = StrategyClass() # 使用預設參數
+    strategy_instance = StrategyClass()
     df = strategy_instance.prepare_features(df)
 
-    # 自動設定切分點 (若最後日期小於目標切分日，則取前 70%)
-    target_split = pd.to_datetime("2025-06-01")
-    if df['datetime'].max() < target_split:
+    # 處理切分點邏輯
+    if args.split:
+        target_split = pd.to_datetime(args.split)
+        
+        # 如果使用者有輸入，但歷史數據的最後一天小於目標切分日，則退回 70%
+        if df['datetime'].max() < target_split:
+            split_idx = int(len(df) * 0.7)
+            SPLIT_DATE = df['datetime'].iloc[split_idx]
+            print(f"[BRAIN] 歷史數據不足以使用目標切分日期，自動調整切分點為 70% 處: {SPLIT_DATE}")
+        else:
+            SPLIT_DATE = target_split
+            print(f"[BRAIN] 樣本外切分點設定為: {SPLIT_DATE}")
+    else:
+        # 如果完全沒有輸入 --split (使用者直接按 Enter)，強制切在 70% 處
         split_idx = int(len(df) * 0.7)
         SPLIT_DATE = df['datetime'].iloc[split_idx]
-        print(f"[BRAIN] 歷史數據不足以使用目標日期，自動調整切分點為: {SPLIT_DATE}")
-    else:
-        SPLIT_DATE = target_split
+        print(f"[BRAIN] 未指定樣本外切分點，自動使用 70% 處: {SPLIT_DATE}")
+
 
     # 4. 執行全域回測
     print("--- 執行全域回測 ---")
     engine = PureBacktestEngine(df, initial_balance=10000, mode='next_open')
-    
-    # 將實例化後的 run 方法交給引擎執行
     engine.run(strategy_instance.run)
     
-    # 取得回測歷史
     full_hist = pd.DataFrame(engine.account.equity_curve)
     
     if full_hist.empty:
@@ -426,13 +447,6 @@ def main():
     save_report_to_file(df, hist_is, hist_os, SPLIT_DATE, strategy_name)
     plot_performance_advanced(df, hist_is, hist_os, SPLIT_DATE, strategy_name)
     print("[BRAIN] 回測流程全部完成！")
-
-    # [可選功能] 如果你之前有加入 custom_logs，可以在此匯出 CSV 供除錯
-    if hasattr(engine.account, 'custom_logs') and len(engine.account.custom_logs) > 0:
-        debug_df = pd.DataFrame(engine.account.custom_logs)
-        debug_csv_name = f"debug_data_{strategy_name}.csv"
-        debug_df.to_csv(debug_csv_name, index=False, encoding='utf-8-sig')
-        print(f"[BRAIN]  已匯出詳細變數日誌: {debug_csv_name}")
 
 
 if __name__ == "__main__":

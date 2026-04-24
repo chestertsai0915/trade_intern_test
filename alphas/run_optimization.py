@@ -17,7 +17,6 @@ def parse_space_for_grid(search_space):
         if config["type"] == "categorical":
             param_grid[key] = config["choices"]
         elif config["type"] == "float":
-            # 自動將 low, high, step 展開成 list，並四捨五入避免浮點數誤差
             low, high, step = config["low"], config["high"], config.get("step", 0.1)
             steps_count = int(round((high - low) / step)) + 1
             param_grid[key] = [round(low + i * step, 4) for i in range(steps_count)]
@@ -26,13 +25,8 @@ def parse_space_for_grid(search_space):
             param_grid[key] = list(range(low, high + 1, step))
     return param_grid
 
-# ==========================================
-# 優化引擎 1：Grid Search
-# ==========================================
 def run_grid_search(env, search_space):
-    # 呼叫轉換器，自動產生 param_grid
     param_grid = parse_space_for_grid(search_space)
-    
     keys, values = zip(*param_grid.items())
     combinations = [dict(zip(keys, v)) for v in itertools.product(*values)]
     
@@ -45,7 +39,6 @@ def run_grid_search(env, search_space):
 
     for params in combinations:
         metrics = env.evaluate(params)
-        
         score = metrics if isinstance(metrics, (int, float)) else metrics.get('sharpe', -999)
         ret = 0.0 if isinstance(metrics, (int, float)) else metrics.get('return', 0.0)
 
@@ -57,16 +50,11 @@ def run_grid_search(env, search_space):
 
     return best_params, best_score
 
-# ==========================================
-# 優化引擎 2：Optuna
-# ==========================================
 def run_optuna_search(env, search_space, n_trials=100, use_genetic=False):
     print(f"--- 啟動 Optuna  (預計執行 {n_trials} 次) ---")
-    
     sampler = optuna.samplers.NSGAIISampler() if use_genetic else optuna.samplers.TPESampler()
 
     def objective(trial):
-        # 自動根據 search_space 動態生成 Optuna 參數
         params = {}
         for key, config in search_space.items():
             if config["type"] == "categorical":
@@ -76,7 +64,6 @@ def run_optuna_search(env, search_space, n_trials=100, use_genetic=False):
             elif config["type"] == "int":
                 params[key] = trial.suggest_int(key, config["low"], config["high"], step=config.get("step", 1))
 
-        # 評估參數
         metrics = env.evaluate(params)
         score = metrics if isinstance(metrics, (int, float)) else metrics.get('sharpe', -999)
         ret = 0.0 if isinstance(metrics, (int, float)) else metrics.get('return', 0.0)
@@ -94,18 +81,31 @@ def run_optuna_search(env, search_space, n_trials=100, use_genetic=False):
 # ==========================================
 def main():
     strategy_file = "alphas/alpha_tunable3.py"
-    env = ResearchEnvironment(strategy_file, split_date="2025-06-01")
+    
+    # ==========================================
+    # 在這裡寫死你要的最佳化回測時間
+    # ==========================================
+    start_date = "2025-03-29"   # 例如: "2024-01-01" (設為 None 則不限制)
+    end_date   = "2026-03-29"   # 整個樣本的結束日
+    split_date = "2026-03-19"   # 樣本外切分點 (最佳化只會使用 split_date 之前的資料進行訓練)
 
-    # 唯一需要修改的地方：定義統一的搜索空間
+    # 傳入所有參數，包含改為 1m 與目標 Symbol
+    env = ResearchEnvironment(
+        strategy_file, 
+        symbol="BTCUSDT",   # 如果是 bybit 資料請改為 "BYBIT_BTCUSDT"
+        interval="1m",      # 統一使用 1m
+        start_date=start_date,
+        end_date=end_date,
+        split_date=split_date
+    )
+
     search_space = {
         "mad_ma_window": {"type": "categorical", "choices": [5, 10, 15, 25, 50, 75, 100]},
         "quanti_window": {"type": "categorical", "choices": [5, 10, 15, 25, 50, 75, 100, 150]},
         "weiht1": {"type": "float", "low": 0.2, "high": 0.8, "step": 0.1},
-        
-        # 如果未來有整數範圍，你可以這樣加：
         "factor_x": {
             "type": "categorical", 
-            "choices": [ "bs_ratio_v1", "custom_atr_14_v1",  "smooth_obv_10_v1","vroc_20_v1", "custom_atr_7_v1","custom_atr_10_v1","custom_atr_14_v1","custom_atr_20_v1","custom_atr_30_v1","custom_atr_50_v1",]
+            "choices": ["bs_ratio_v1", "custom_atr_14_v1", "smooth_obv_10_v1", "vroc_20_v1", "custom_atr_7_v1", "custom_atr_10_v1", "custom_atr_20_v1", "custom_atr_30_v1", "custom_atr_50_v1"]
         }
     }
 
@@ -122,6 +122,7 @@ def main():
     print("\n" + "="*60)
     print(f"最佳參數組合: {best_params}")
     print(f"最佳 Sharpe Ratio: {best_score:.4f}")
+    print(f"最佳化耗時: {elapsed:.2f} 秒")
     print("="*60)
 
 if __name__ == "__main__":

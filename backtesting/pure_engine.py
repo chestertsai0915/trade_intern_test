@@ -80,9 +80,8 @@ class VirtualAccount:
         fee = notional * self.taker_fee
         
         # 嚴格購買力檢查
-        required_margin = notional + fee
-        if self.balance < required_margin: 
-            return 
+        if self.balance < fee: 
+            return
 
         # 【優化】均價計算邏輯改寫，變得超級白話、無歧義
         if self.position == 0:
@@ -180,8 +179,8 @@ class PureBacktestEngine:
         current_pct = current_val / equity
 
         # 3. 核心升級：加入容忍度 (Tolerance Threshold)
-        # 設定 5% (0.05) 的容忍度。只要倉位偏移不超過 5%，就不浪費手續費調倉
-        TOLERANCE = 0.05 
+        # 設定 10% (0.1) 的容忍度。只要倉位偏移不超過 10%，就不浪費手續費調倉
+        TOLERANCE = 0.1 
 
         # 如果目標不是要完全平倉 (0.0)，且目前的曝險比例與目標差距在容忍度內，直接跳過！
         if abs(target_pct) > 1e-6 and abs(target_pct - current_pct) < TOLERANCE:
