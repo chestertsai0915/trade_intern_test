@@ -13,6 +13,7 @@ class VirtualAccount:
         self.avg_price = 0.0            
         self.taker_fee = taker_fee
         self.equity_curve = []          
+        self.total_funding_fee = 0.0
 
     def mark_to_market(self, current_price, timestamp=None, record=False):
         unrealized_pnl = 0
@@ -102,6 +103,19 @@ class VirtualAccount:
             
         self.balance -= fee
 
+    def pay_funding(self, funding_rate, current_price):
+        if self.position == 0 or funding_rate == 0:
+            return
+        
+        # 計算名目價值 (倉位數量 * 當前價格)
+        # 如果是多頭 (position > 0)，且費率為正 -> funding_fee > 0 (要付錢)
+        # 如果是空頭 (position < 0)，且費率為正 -> funding_fee < 0 (會收錢)
+        funding_fee = self.position * current_price * funding_rate
+        
+        # 扣除資金費 (付錢時 balance 減少，收錢時負負得正 balance 增加)
+        self.balance -= funding_fee
+        self.total_funding_fee -= funding_fee
+
 
 class PureBacktestEngine:
     def __init__(self, df, initial_balance=10000.0, mode='next_open'):
@@ -122,6 +136,8 @@ class PureBacktestEngine:
             current_open = row['open']
             current_time = row['datetime']
             
+            # 獲取資金費率 (如果這根 K 線沒有資金費，預設為 0)
+            funding_rate = row.get('funding_rate', 0.0)
             # ==========================================
             # 1. 執行 Pending Order (Next Open Mode)
             # ==========================================
@@ -136,7 +152,12 @@ class PureBacktestEngine:
                     action, pct = self.pending_action
                     self._process_legacy_order(action, pct, current_open, equity_at_open)
                     self.pending_action = None
-
+            # ==========================================
+            # 1.5 結算資金費率 (Funding Fee)
+            # ==========================================
+            # 只要遇到資金費結算點，就以當下開盤價結算資金費
+            if funding_rate != 0.0 and self.account.position != 0:
+                self.account.pay_funding(funding_rate, current_open)
             # ==========================================
             # 2. 更新權益 (Mark to Market) 
             # ==========================================
@@ -227,3 +248,5 @@ class PureBacktestEngine:
             if self.account.position < 0:
                 cover_qty = abs(self.account.position) * pct
                 self.account.execute('BUY', cover_qty, price, "Short Exit")
+
+    

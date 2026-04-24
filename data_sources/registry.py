@@ -5,6 +5,8 @@ from .fear_greed import FearGreedFetcher
 from .google_trends import GoogleTrendsFetcher
 from .macro_economic import FredFetcher
 from .us_stock import USStockFetcher
+from .funding_rate import FundingRateFetcher
+from .funding_rate_bybit import BybitFundingRateFetcher 
 
 # 2. 建立註冊表清單
 # 這裡列出所有你想啟用的 Fetcher Class (注意：是 Class 本身，不是實例)
@@ -13,6 +15,8 @@ _FETCHER_CLASSES = [
     GoogleTrendsFetcher,
     FredFetcher,
     USStockFetcher,
+    FundingRateFetcher,
+    BybitFundingRateFetcher
 ]
 
 # 3. 自動生成字典 { "fear_greed": FearGreedFetcherClass, ... }

@@ -2,6 +2,7 @@ import pandas as pd
 import logging
 import sys
 import os
+import sqlite3 
 
 # 確保可以引用專案根目錄的模組
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -67,6 +68,36 @@ class BacktestDataFactory:
         main_df['datetime'] = pd.to_datetime(main_df['open_time'], unit='ms')
         main_df = main_df.sort_values('datetime').reset_index(drop=True)
 
+        # ==========================================
+        # 1.5 新增：精準對齊資金費率 (Funding Rate)
+        
+        try:
+            # 直接將資料庫中的 timestamp (ms) 當作 open_time 來 Join
+            query = """
+                SELECT timestamp AS open_time, value AS funding_rate 
+                FROM external_data 
+                WHERE symbol = ? AND metric = 'funding_rate'
+            """
+            funding_df = pd.read_sql(query, self.db.conn, params=(symbol,))
+            
+            if not funding_df.empty:
+                funding_df['funding_rate'] = funding_df['funding_rate'].astype(float)
+                funding_df['open_time'] = funding_df['open_time'].astype('int64')
+                
+                # Left Join 到 main_df，只在結算點(如 08:00:00) 的那一根 K 線會有數值
+                main_df = pd.merge(main_df, funding_df, on='open_time', how='left')
+                
+                # 【極度重要】立刻把沒有結算的時間點補 0.0！
+                # 這樣能形成一堵牆，防止程式最後面的 ffill() 把資金費率往後蔓延！
+                main_df['funding_rate'] = main_df['funding_rate'].fillna(0.0)
+            else:
+                main_df['funding_rate'] = 0.0
+                
+        except Exception as e:
+            print(f" [Factory] 讀取資金費率時發生錯誤 (自動設為 0): {e}")
+            main_df['funding_rate'] = 0.0
+        # ==========================================
+
         # 2. 準備 DataBoard
         start_ts = int(main_df['open_time'].min())
         external_data = self._load_all_external_data(start_time=start_ts)
@@ -101,6 +132,8 @@ class BacktestDataFactory:
         if end_time:
             final_df = final_df[final_df['datetime'] <= pd.to_datetime(end_time)]
 
+        # 這裡的 ffill 處理特徵的空值，但因為我們前面已經給 funding_rate 填了 0.0
+        # 所以 ffill 不會動到 funding_rate，完美確保只有 8 小時結算點才扣錢！
         final_df = final_df.ffill().fillna(0)
         
         print(f" [Factory] 數據準備完成! Shape: {final_df.shape}")
