@@ -55,11 +55,11 @@ def run_fill_data(source, symbol, interval, start_time, end_time):
 if __name__ == "__main__":
     
    
-    TARGET_SOURCE = "bybit"               # "binance" 或 "bybit"
+    TARGET_SOURCE = "binance"               # "binance" 或 "bybit"
     TARGET_SYMBOL = "BTCUSDT" 
     TARGET_INTERVAL = "1m"                # 維持通用的 1m 格式
     START_TIME = "2025-03-29 00:00:00" 
-    END_TIME   = "2026-03-29 00:00:00" 
+    END_TIME   = "2026-04-20 00:00:00" 
     
     run_fill_data(
         source=TARGET_SOURCE,

@@ -154,7 +154,8 @@ class DataManager:
             'fear_greed': ['fear_greed'],
             'funding_rate': ['funding_rate'],
             'google_trends': ['google_trends_BTC', 'google_trends_crypto', 'google_trends_Bitcoin'],
-            'fred_macro': ['yield_10y', 'yield_2y', 'fed_assets']
+            'fred_macro': ['yield_10y', 'yield_2y', 'fed_assets'],
+            'bybit_oim_lvl1': ['bybit_oim_lvl1']
         }
 
         for source_name in self.fetchers.keys():

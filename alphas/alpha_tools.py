@@ -13,26 +13,23 @@ def get_tiered_position(raw_signal, th_weak=0.5, pos_weak=0.5, th_strong=0.8, po
     elif raw_signal <= -th_weak: return -pos_weak
     else: return 0.0
 
-def get_tiered_position_long_only(raw_signal, th_weak=0.5, pos_weak=0.5, th_strong=0.8, pos_strong=1.0):
-    """將連續訊號轉換為階梯式的目標倉位"""
-    if raw_signal >= th_strong: return pos_strong
-    elif raw_signal >= th_weak: return pos_weak
-    elif raw_signal <= -th_strong: return 0
-    elif raw_signal <= -th_weak: return 0
-    else: return 0.0
 
-def get_tiered_position_2(raw_signal, th_weak=0.5, pos_weak=0.5, th_strong=0.55, pos_strong=1.0):
-    """將連續訊號轉換為階梯式的目標倉位"""
-    if raw_signal >= th_strong: return 0.99
-    elif raw_signal >= th_weak: return 0
-    elif raw_signal <= -th_strong: return -0.99
-    elif raw_signal <= -th_weak: return 0
-    else: return 0.0
 # 2. 時間序列指標加工 (Vectorized)
 
 def add_sma(df, column='close', window=20, out_name='dyn_sma'):
     """計算簡單移動平均線"""
     df[out_name] = df[column].rolling(window=window).mean()
+    df[out_name] = df[out_name].fillna(0)  # 前向填充，確保初期也有數值
+    return df
+
+def add_ewm_sma(df, column='close', window=20, out_name='dyn_ewm_sma'):
+    """計算指數加權移動平均線"""
+    df[out_name] = df[column].ewm(span=window).mean()
+    return df
+
+def multiply(df, column1='close', column2='volumn', out_name='dyn_rank'):
+    """計算乘積"""
+    df[out_name] = df[column1] * df[column2]
     return df
 
 def add_zscore(df, column='close', window=100, out_name='dyn_zscore'):
@@ -41,6 +38,10 @@ def add_zscore(df, column='close', window=100, out_name='dyn_zscore'):
     roll_std = df[column].rolling(window=window).std()+0.000001
     # 避免除以 0
     df[out_name] = (df[column] - roll_mean) / roll_std
+    return df
+def add_rank_norm(df,column='close',window=100,out_name='rank_norm'):
+    rank = df[column].rolling(window=window).rank(pct=True)
+    df[out_name] = (rank - 0.5) * 2
     return df
 
 def add_atr_like(df, column='close', window=14, out_name='dyn_atr'):
@@ -87,5 +88,20 @@ def add_quantile(df, column='close', window=25, quantile=0.8, out_name='dyn_quan
 
     # 計算滾動分位數
     df[out_name] = df[column].rolling(window=window, min_periods=window).quantile(quantile).fillna(0)
+    
+    return df
+def realized_volatility(df, column='close', window=20, out_name='realized_vol'):
+    """
+    計算實現波動率 (Realized Volatility)
+    公式: sqrt(252) * std(log(價格變化率))
+    """
+    # 計算對數收益率
+    df['log_return'] = np.log(df[column] / df[column].shift(1))
+    
+    # 計算滾動標準差並年化
+    df[out_name] = df['log_return'].rolling(window=window).std() * np.sqrt(252)
+    
+    # 清理臨時欄位
+    df.drop(columns=['log_return'], inplace=True)
     
     return df

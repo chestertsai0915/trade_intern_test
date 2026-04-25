@@ -11,7 +11,7 @@ try:
     from backtesting.data_factory import BacktestDataFactory
 except ImportError:
     pass
-
+EVALUATION_CACHE = {}
 class ResearchEnvironment:
     # 1. 新增 start_date 與 end_date，並把預設 interval 改為 1m
     def __init__(self, strategy_file, symbol="BTCUSDT", interval="1m", start_date=None, end_date=None, split_date=None):
@@ -50,6 +50,12 @@ class ResearchEnvironment:
             raise ValueError("策略檔必須包含 'class Strategy(BaseAlpha):'")
 
     def evaluate(self, params):
+        param_key = tuple(sorted(params.items()))
+        
+        if param_key in EVALUATION_CACHE:
+            # 直接回傳歷史結果，省下 100% 的運算時間！
+            return EVALUATION_CACHE[param_key]
+        
         df = self.df_is.copy()
         strategy_instance = self.strategy_class(params)
         df = strategy_instance.prepare_features(df)
@@ -68,7 +74,11 @@ class ResearchEnvironment:
         sharpe = (pct.mean() / pct.std()) * np.sqrt(365 * 24) # 如果是 1m 資料，這裡未來可以改成 * np.sqrt(365 * 24 * 60)
         total_return = (equity.iloc[-1] / 10000) - 1
         
-        return {
+        result = {
             "sharpe": sharpe,
             "return": total_return
         }
+
+        EVALUATION_CACHE[param_key] = result
+        
+        return result

@@ -41,6 +41,11 @@ class BaseAlpha:
         # 執行你寫的交易邏輯
         try:
             target_pos = self.generate_target_position(row, account)
+            # 允許 None 直接回傳，不強制轉 float
+            if target_pos is None:
+                return None
             return float(target_pos)
-        except Exception:
+        except Exception as e:
+            # 建議印出錯誤，才不會被吃掉不知道發生什麼事
+            # print(f"Strategy Error: {e}") 
             return 0.0

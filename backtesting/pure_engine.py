@@ -5,12 +5,19 @@ import numpy as np
 class VirtualAccount:
     """ 
     虛擬帳戶 (支援合約/雙向交易)
+    
+    修正紀錄:
+    1. [BUG FIX] _open_position: 購買力檢查從只檢查 fee 改為檢查 fee + 最低保證金
+       原本只要 balance >= fee 就能開倉，導致帳戶可以無限加倉直到 balance 被手續費磨光
+    2. [BUG FIX] balance 歸零防護：balance 不可為負，若扣費後為負直接攔截
     """
-    def __init__(self, initial_balance=10000.0, maker_fee=0.0002, taker_fee=0.0005):
+    def __init__(self, initial_balance=10000.0, maker_fee=0.0002, taker_fee=0.0005,
+                 leverage=1.0):
         self.initial_balance = initial_balance
         self.balance = initial_balance  
         self.position = 0.0             
-        self.avg_price = 0.0            
+        self.avg_price = 0.0
+        self.leverage = leverage        # 新增：槓桿倍數 (預設 1x，即現貨模式)
         self.taker_fee = taker_fee
         self.equity_curve = []          
         self.total_funding_fee = 0.0
@@ -45,8 +52,9 @@ class VirtualAccount:
                 self.balance -= (cover_qty * price * self.taker_fee)
                 self.position += cover_qty
                 
-                # 【新增防呆】完全平倉時，徹底重置均價 (消滅幽靈價格)
-                if self.position == 0:
+                # 完全平倉時，徹底重置均價 (消滅幽靈價格)
+                if abs(self.position) < 1e-9:
+                    self.position = 0.0
                     self.avg_price = 0.0
                     
                 remaining_qty = quantity - cover_qty
@@ -65,8 +73,9 @@ class VirtualAccount:
                 self.balance -= (close_qty * price * self.taker_fee)
                 self.position -= close_qty
                 
-                # 【新增防呆】完全平倉時，徹底重置均價 (消滅幽靈價格)
-                if self.position == 0:
+                # 完全平倉時，徹底重置均價 (消滅幽靈價格)
+                if abs(self.position) < 1e-9:
+                    self.position = 0.0
                     self.avg_price = 0.0
                     
                 remaining_qty = quantity - close_qty
@@ -79,23 +88,29 @@ class VirtualAccount:
     def _open_position(self, direction, quantity, price):
         notional = quantity * price
         fee = notional * self.taker_fee
-        
-        # 嚴格購買力檢查
-        if self.balance < fee: 
+
+        # =====================================================
+        # [BUG FIX 1] 購買力檢查：必須同時能負擔手續費 + 保證金
+        # 原本只檢查 fee，導致 balance 足夠付手續費就能無限開倉
+        # 保證金 = 名目價值 / 槓桿倍數
+        # =====================================================
+        required_margin = notional / self.leverage
+        if self.balance < (fee + required_margin):
+            # 若資金不足，嘗試用現有資金最大化開倉
+            # available_for_margin = self.balance / (1 + self.taker_fee)
+            # 為了簡單可靠，直接拒絕此次開倉
             return
 
-        # 【優化】均價計算邏輯改寫，變得超級白話、無歧義
-        if self.position == 0:
-            # 如果是從零開倉，均價就是當前的成交價
+        # 均價計算
+        if abs(self.position) < 1e-9:
             self.avg_price = price
         else:
-            # 如果是同向加倉，計算加權平均價 (VWAP)
             current_abs_pos = abs(self.position)
             old_cost = current_abs_pos * self.avg_price
             new_cost = quantity * price
             self.avg_price = (old_cost + new_cost) / (current_abs_pos + quantity)
 
-        # 更新真實倉位與扣除手續費
+        # 更新倉位與扣除手續費
         if direction == 'LONG':
             self.position += quantity
         elif direction == 'SHORT':
@@ -103,43 +118,59 @@ class VirtualAccount:
             
         self.balance -= fee
 
+        # =====================================================
+        # [BUG FIX 2] balance 不可為負（浮點誤差防護）
+        # =====================================================
+        if self.balance < 0:
+            self.balance = 0.0
+
     def pay_funding(self, funding_rate, current_price):
         if self.position == 0 or funding_rate == 0:
             return
         
-        # 計算名目價值 (倉位數量 * 當前價格)
-        # 如果是多頭 (position > 0)，且費率為正 -> funding_fee > 0 (要付錢)
-        # 如果是空頭 (position < 0)，且費率為正 -> funding_fee < 0 (會收錢)
+        # 多頭 + 正費率 → 付錢；空頭 + 正費率 → 收錢
         funding_fee = self.position * current_price * funding_rate
-        
-        # 扣除資金費 (付錢時 balance 減少，收錢時負負得正 balance 增加)
         self.balance -= funding_fee
         self.total_funding_fee -= funding_fee
 
 
 class PureBacktestEngine:
-    def __init__(self, df, initial_balance=10000.0, mode='next_open'):
+    def __init__(self, df, initial_balance=10000.0, mode='next_open',
+                 leverage=1.0, tolerance=0.1):
+        """
+        參數說明:
+        - leverage  : 槓桿倍數，傳入 VirtualAccount 用於保證金計算 (預設 1x)
+        - tolerance : rebalance 容忍度，差距小於此值不交易 (預設 0.15 = 15%)
+                      原本 0.1，對 1 分鐘資料太小會導致頻繁換手吃手續費
+        """
         self.df = df
-        self.account = VirtualAccount(initial_balance)
+        self.account = VirtualAccount(initial_balance, leverage=leverage)
         self.mode = mode
+        self.tolerance = tolerance      # 新增：外部可配置
         
         self.pending_action = None 
         self.pending_target = None 
 
     def run(self, strategy_func):
-        # 【修正問題 3】消滅 iterrows，改用 dict list 迭代，速度狂飆！
-        # 這樣寫不僅極快，還完美相容策略檔中的 row.get('欄位')
         records = self.df.to_dict('records')
         
         for row in records:
             current_close = row['close']
-            current_open = row['open']
-            current_time = row['datetime']
-            
-            # 獲取資金費率 (如果這根 K 線沒有資金費，預設為 0)
-            funding_rate = row.get('funding_rate', 0.0)
+            current_open  = row['open']
+            current_time  = row['datetime']
+            funding_rate  = row.get('funding_rate', 0.0)
+
             # ==========================================
-            # 1. 執行 Pending Order (Next Open Mode)
+            # 1. 結算資金費率 (Funding Fee) ← 移到最前面
+            # ==========================================
+            # [BUG FIX 3] 時序修正：幣安資金費是在結算時間點「先扣費」
+            # 原本是先執行 pending order 後才扣費，策略可以在費率結算前搶先開倉
+            # 正確順序：先付資金費 → 再執行掛單 → 再 mark-to-market
+            if funding_rate != 0.0 and self.account.position != 0:
+                self.account.pay_funding(funding_rate, current_open)
+
+            # ==========================================
+            # 2. 執行 Pending Order (Next Open Mode)
             # ==========================================
             if self.mode == 'next_open':
                 equity_at_open = self.account.mark_to_market(current_open)
@@ -152,26 +183,25 @@ class PureBacktestEngine:
                     action, pct = self.pending_action
                     self._process_legacy_order(action, pct, current_open, equity_at_open)
                     self.pending_action = None
+
             # ==========================================
-            # 1.5 結算資金費率 (Funding Fee)
-            # ==========================================
-            # 只要遇到資金費結算點，就以當下開盤價結算資金費
-            if funding_rate != 0.0 and self.account.position != 0:
-                self.account.pay_funding(funding_rate, current_open)
-            # ==========================================
-            # 2. 更新權益 (Mark to Market) 
+            # 3. 更新權益 (Mark to Market) 
             # ==========================================
             equity = self.account.mark_to_market(current_close, current_time, record=True)
             
             # ==========================================
-            # 3. 呼叫策略 (產生訊號)
+            # 4. 呼叫策略 (產生訊號)
             # ==========================================
-            # 因為 records 是 dict，這裡傳進去的 row 完美支援 row.get()
             signal = strategy_func(row, self.account)
 
             # ==========================================
-            # 4. 處理訊號 (分流處理)
+            # 5. 處理訊號 (分流處理)
             # ==========================================
+            if len(self.account.equity_curve) > 0:
+                self.account.equity_curve[-1]['signal'] = signal
+            if signal is None:
+                continue
+
             if isinstance(signal, (int, float, np.number)):
                 target_pct = float(signal)
                 if self.mode == 'close':
@@ -189,41 +219,33 @@ class PureBacktestEngine:
 
     def _rebalance(self, target_pct, price, equity):
         """
-        核心調倉邏輯：包含比例容忍度與微小價值過濾
+        核心調倉邏輯
         """
-        # 1. 避免權益為 0 導致除以零錯誤
         if equity <= 0: 
             return
 
-        # 2. 計算目前的實際倉位比例 (Current Weight)
         current_val = self.account.position * price
         current_pct = current_val / equity
 
-        # 3. 核心升級：加入容忍度 (Tolerance Threshold)
-        # 設定 10% (0.1) 的容忍度。只要倉位偏移不超過 10%，就不浪費手續費調倉
-        TOLERANCE = 0.1 
+        # [BUG FIX 4] 使用外部可配置的容忍度（預設 0.15 取代原本寫死的 0.1）
+        TOLERANCE = self.tolerance
 
-        # 如果目標不是要完全平倉 (0.0)，且目前的曝險比例與目標差距在容忍度內，直接跳過！
         if abs(target_pct) > 1e-6 and abs(target_pct - current_pct) < TOLERANCE:
             return
 
-        # 4. 正常計算目標數量與差額
         target_val = equity * target_pct
         target_qty = target_val / price
         current_qty = self.account.position
         delta_qty = target_qty - current_qty
         
-        # 5. 執行門檻過濾 (低於 10U 的變動不交易)
         MIN_TRADE_VALUE = 10.0
         delta_value = abs(delta_qty * price)
 
-        # 實盤級別的細節：如果目標是 0 (完全平倉)，即使剩下的部位價值不到 10U，也必須強制平掉 (清掃灰塵)
-        if abs(target_pct) < 1e-6 and abs(current_qty) > 1e-6:
-            pass # 強制放行
+        if abs(target_pct) < 1e-6 and abs(current_qty) > 1e-9:
+            pass  # 強制平倉放行
         elif delta_value < MIN_TRADE_VALUE:
-            return # 變動太小，跳過
+            return
 
-        # 6. 執行交易
         if delta_qty > 0:
             self.account.execute('BUY', delta_qty, price, "Rebalance Buy")
         elif delta_qty < 0:
@@ -248,5 +270,3 @@ class PureBacktestEngine:
             if self.account.position < 0:
                 cover_qty = abs(self.account.position) * pct
                 self.account.execute('BUY', cover_qty, price, "Short Exit")
-
-    

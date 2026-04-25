@@ -80,14 +80,14 @@ def run_optuna_search(env, search_space, n_trials=100, use_genetic=False):
 # 主程式 (統一控制中心)
 # ==========================================
 def main():
-    strategy_file = "alphas/alpha_tunable3.py"
+    strategy_file = "alphas/alpha_take_home_3.py"
     
     # ==========================================
     # 在這裡寫死你要的最佳化回測時間
     # ==========================================
-    start_date = "2025-03-29"   # 例如: "2024-01-01" (設為 None 則不限制)
+    start_date = "2026-03-25"   # 例如: "2024-01-01" (設為 None 則不限制)
     end_date   = "2026-03-29"   # 整個樣本的結束日
-    split_date = "2026-03-19"   # 樣本外切分點 (最佳化只會使用 split_date 之前的資料進行訓練)
+    split_date = "2026-03-29" # "2026-03-19"   # 樣本外切分點 (最佳化只會使用 split_date 之前的資料進行訓練)
 
     # 傳入所有參數，包含改為 1m 與目標 Symbol
     env = ResearchEnvironment(
@@ -98,7 +98,7 @@ def main():
         end_date=end_date,
         split_date=split_date
     )
-
+    """
     search_space = {
         "mad_ma_window": {"type": "categorical", "choices": [5, 10, 15, 25, 50, 75, 100]},
         "quanti_window": {"type": "categorical", "choices": [5, 10, 15, 25, 50, 75, 100, 150]},
@@ -108,6 +108,18 @@ def main():
             "choices": ["bs_ratio_v1", "custom_atr_14_v1", "smooth_obv_10_v1", "vroc_20_v1", "custom_atr_7_v1", "custom_atr_10_v1", "custom_atr_20_v1", "custom_atr_30_v1", "custom_atr_50_v1"]
         }
     }
+    """
+    search_space = {
+       "oim_smooth": {"type": "categorical", "choices": [3, 5, 10, 20, 30]},
+        
+        # 背景基準 (過去 1 小時 vs 2 小時 vs 4 小時)
+        "zscore_window": {"type": "categorical", "choices": [60, 120, 240]},
+        
+        # 死區大小：決定了策略的交易頻率 (0.5 代表 tanh 必須超過 0.5 才開倉)
+        "dead_zone": {"type": "categorical", "choices": [0.2, 0.4, 0.6, 0.8]}
+
+    }
+
 
     MODE = "optuna"  # "grid" 或 "optuna"
     
@@ -116,7 +128,7 @@ def main():
     if MODE == "grid":
         best_params, best_score = run_grid_search(env, search_space)
     elif MODE == "optuna":
-        best_params, best_score = run_optuna_search(env, search_space, n_trials=250, use_genetic=True)
+        best_params, best_score = run_optuna_search(env, search_space, n_trials=250, use_genetic=False)
 
     elapsed = time.time() - start_time
     print("\n" + "="*60)

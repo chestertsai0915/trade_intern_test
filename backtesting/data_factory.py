@@ -1,3 +1,6 @@
+import hashlib
+import json
+
 import pandas as pd
 import logging
 import sys
@@ -18,6 +21,12 @@ class BacktestDataFactory:
     def __init__(self, db_path="trading_data.db"):
         self.db = DatabaseHandler(db_path, skip_backup=True)
         self.feature_store = FeatureStore()
+        # 新增：建立硬碟快取資料夾
+        # ==========================================
+        self.cache_dir = os.path.join(current_dir, ".data_cache")
+        if not os.path.exists(self.cache_dir):
+            os.makedirs(self.cache_dir)
+
 
     def _load_all_external_data(self, start_time=None):
         """ 載入外部數據 (保持不變) """
@@ -29,7 +38,8 @@ class BacktestDataFactory:
             'fear_greed': ['fear_greed'],
             'funding_rate': ['funding_rate'],
             'google_trends': ['google_trends_BTC'],
-            'fred_macro': ['yield_10y', 'fed_assets']
+            'fred_macro': ['yield_10y', 'fed_assets'],
+            'bybit_oim_lvl1': ['bybit_oim_lvl1']
         }
 
         # 1. QQQ
@@ -41,7 +51,10 @@ class BacktestDataFactory:
         for source, metrics in metrics_map.items():
             dfs = []
             for metric in metrics:
-                target_symbol = "BTCUSDT" if source == 'funding_rate' else "GLOBAL"
+                if source in ['funding_rate', 'bybit_oim_lvl1']:
+                    target_symbol = "BTCUSDT"
+                else:
+                    target_symbol = "GLOBAL"
                 df = self.db.load_external_data(target_symbol, metric, start_time=start_time, limit=default_limit)
                 if not df.empty:
                     df['metric'] = metric
@@ -58,10 +71,32 @@ class BacktestDataFactory:
         動態準備特徵數據
         :param feature_ids: 策略指定的特徵 ID 列表 (List[str])
         """
+        # 1. 產生快取
+        # ==========================================
+        cache_params = {
+            "symbol": symbol,
+            "interval": interval,
+            "feature_ids": sorted(feature_ids) if feature_ids else [],
+            "start_time": str(start_time),
+            "end_time": str(end_time)
+        }
+        # 將參數轉為字串並產生 MD5 雜湊值
+        param_str = json.dumps(cache_params, sort_keys=True)
+        cache_hash = hashlib.md5(param_str.encode('utf-8')).hexdigest()
+        cache_file = os.path.join(self.cache_dir, f"data_{cache_hash}.parquet")
+
+        # ==========================================
+        # 2. 檢查是否命中快取
+        # ==========================================
+        if os.path.exists(cache_file):
+           
+            return pd.read_parquet(cache_file)
+
+        
         print(f" [Factory] 正在為 {symbol} ({interval}) 準備數據...")
         
         # 1. 讀取主 K 線
-        main_df = self.db.load_market_data(symbol, interval, limit=50000)
+        main_df = self.db.load_market_data(symbol, interval, limit=None)
         if main_df.empty:
             raise ValueError(f"資料庫無 {symbol} K 線數據")
 
@@ -72,7 +107,6 @@ class BacktestDataFactory:
         # 1.5 新增：精準對齊資金費率 (Funding Rate)
         
         try:
-            # 直接將資料庫中的 timestamp (ms) 當作 open_time 來 Join
             query = """
                 SELECT timestamp AS open_time, value AS funding_rate 
                 FROM external_data 
@@ -136,5 +170,9 @@ class BacktestDataFactory:
         # 所以 ffill 不會動到 funding_rate，完美確保只有 8 小時結算點才扣錢！
         final_df = final_df.ffill().fillna(0)
         
-        print(f" [Factory] 數據準備完成! Shape: {final_df.shape}")
+        # 4. 存入硬碟快取
+       
+        # 確保 datetime 格式相容 parquet
+        final_df.to_parquet(cache_file, index=False)
+        print(f" [Factory] 寫入完成! Shape: {final_df.shape}")
         return final_df

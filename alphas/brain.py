@@ -93,15 +93,30 @@ def test_correlation_difference(r_is, n_is, r_os, n_os):
 class PerformanceAnalyzer:
     def __init__(self, history_df, benchmark_series):
         self.hist = history_df.copy()
+        self.hist['datetime'] = pd.to_datetime(self.hist['datetime'])
         self.hist.set_index('datetime', inplace=True)
         self.benchmark = benchmark_series.copy()
         
-        # 基礎報酬率
+        # 基礎報酬率 (1分鐘級別 - 保留給其他高頻指標如 IC 使用)
         self.hist['returns'] = self.hist['equity'].pct_change().fillna(0)
         self.benchmark_returns = self.benchmark.pct_change().reindex(self.hist.index).fillna(0)
-        
-        # 超額報酬 (Active Return) -> 用於算 IR
         self.hist['active_returns'] = self.hist['returns'] - self.benchmark_returns
+
+        # ==========================================
+        # [新增] 準備「日頻」數據，專供風險指標與統計檢定使用
+        # ==========================================
+        daily_equity = self.hist['equity'].resample('1D').last().dropna()
+        daily_bench = self.benchmark.resample('1D').last().dropna()
+        
+        # 對齊 index
+        common_idx = daily_equity.index.intersection(daily_bench.index)
+        self.daily_equity = daily_equity.loc[common_idx]
+        self.daily_bench = daily_bench.loc[common_idx]
+        
+        # 計算日報酬與主動報酬
+        self.daily_returns = self.daily_equity.pct_change().dropna()
+        self.daily_bench_returns = self.daily_bench.pct_change().dropna()
+        self.daily_active_returns = self.daily_returns - self.daily_bench_returns
 
     def get_basic_metrics(self):
         if self.hist.empty: return {}
@@ -111,45 +126,72 @@ class PerformanceAnalyzer:
         dd = (self.hist['equity'] - roll_max) / roll_max
         max_dd = dd.min()
         
-        # 年化 Sharpe
-        freq_factor = 24 * 365
-        if len(self.hist) > 1:
-            time_diff = (self.hist.index[1] - self.hist.index[0]).total_seconds()
-            if time_diff > 0:
-                freq_factor = (365 * 24 * 3600) / time_diff
+       
+       
 
-        std = self.hist['returns'].std()
+        daily_equity = self.hist['equity'].resample('1D').last().dropna()
+        
+        # 2. 計算日報酬率
+        daily_returns = daily_equity.pct_change().dropna()
+
+        # 3. 以日報酬計算年化標準差與夏普 (乘數統一為 365)
+        std_daily = daily_returns.std()
+        
         sharpe = 0
-        if std != 0:
-            sharpe = (self.hist['returns'].mean() / std) * np.sqrt(freq_factor)
+        if std_daily != 0:
+            sharpe = (daily_returns.mean() / std_daily) * np.sqrt(365)
             
         return {
             "Total Return": total_ret,
             "Max Drawdown": max_dd,
             "Sharpe Ratio": sharpe,
-            "Vol (Ann.)": std * np.sqrt(freq_factor)
+            "Vol (Ann.)": std_daily * np.sqrt(365)
         }
 
     def get_advanced_metrics(self):
         if self.hist.empty: return {}
         # IC
         pos = self.hist['position']
-        future_ret = self.benchmark_returns.shift(-1)
+        
+        # [專業修正] 高頻數據只看未來 1 分鐘 (shift(-1)) 雜訊太大
+        # 建議根據你的平均持倉時間來設定，例如看未來 15 分鐘的累積報酬
+        forward_period = 15 
+        
+        # 計算未來 N 期的累積報酬 (Future Return)
+        # 這裡用 benchmark 價格作為標的資產價格
+        future_ret = self.benchmark.shift(-forward_period) / self.benchmark - 1
+        
         valid = pd.DataFrame({'pos': pos, 'ret': future_ret}).dropna()
         
         ic_sp = 0
         if not valid.empty and valid['pos'].std() != 0:
             ic_sp = valid['pos'].corr(valid['ret'], method='spearman')
-
         # IR (Information Ratio)
-        active_ret = self.hist['active_returns']
-        tracking_err = active_ret.std()
+    
+        # IR (Information Ratio) - 降頻至日線 (與 Sharpe 同步)
+        # 抽出每日的權益與 Benchmark 快照
+        daily_equity = self.hist['equity'].resample('1D').last().dropna()
+        daily_bench = self.benchmark.resample('1D').last().dropna()
+        
+        # 對齊 index 確保長度一致
+        common_idx = daily_equity.index.intersection(daily_bench.index)
+        daily_equity = daily_equity.loc[common_idx]
+        daily_bench = daily_bench.loc[common_idx]
+
+        # 計算日報酬
+        daily_ret = daily_equity.pct_change().dropna()
+        daily_bench_ret = daily_bench.pct_change().dropna()
+        
+        # 計算日主動報酬 (Active Return)
+        daily_active_ret = daily_ret - daily_bench_ret
+        
+        tracking_err = daily_active_ret.std()
         ir = 0
         if tracking_err != 0:
-            ir = (active_ret.mean() / tracking_err) * np.sqrt(24*365)
+            ir = (daily_active_ret.mean() / tracking_err) * np.sqrt(365)
 
         return {
-            "IC (Spearman)": ic_sp,
+            f"IC (Sp)": ic_sp,
             "IR": ir,
             "n_samples": len(valid) # 用於 IC 檢定
         }
@@ -164,46 +206,50 @@ def perform_robustness_check(hist_is, hist_os, benchmark_series):
     """
     results = {}
     
-    # 建立 Analyzer 以取得運算所需的數據
     analyzer_is = PerformanceAnalyzer(hist_is, benchmark_series)
     analyzer_os = PerformanceAnalyzer(hist_os, benchmark_series)
     
     adv_is = analyzer_is.get_advanced_metrics()
     adv_os = analyzer_os.get_advanced_metrics()
 
-    # 取得原始序列 (Series)
-    rets_is = analyzer_is.hist['returns']
-    rets_os = analyzer_os.hist['returns']
-    active_is = analyzer_is.hist['active_returns']
-    active_os = analyzer_os.hist['active_returns']
+    # ==========================================
+    # [修正] 取得日頻序列 (Series)，進行真實時間尺度的統計檢定
+    # 絕對不能用 1 分鐘資料算 P-Value，否則 N 太大會導致全部過度拒絕
+    # ==========================================
+    rets_is = analyzer_is.daily_returns
+    rets_os = analyzer_os.daily_returns
+    active_is = analyzer_is.daily_active_returns
+    active_os = analyzer_os.daily_active_returns
 
+    # 至少要有 10 天的數據才能做檢定
     if len(rets_is) < 10 or len(rets_os) < 10:
-        return {"error": "數據不足"}
+        return {"error": "日線數據不足 10 天，無法執行統計檢定"}
 
     # --- 1. 收益率檢定 (T-Test) ---
     t_stat, p_val_mean = stats.ttest_ind(rets_is, rets_os, equal_var=False, alternative='greater')
     mean_res = " 通過"
     if p_val_mean < 0.05: mean_res = " 顯著衰退"
-    results['return'] = {'stat': t_stat, 'p': p_val_mean, 'res': mean_res, 'name': '收益率 (Return)'}
+    results['return'] = {'stat': t_stat, 'p': p_val_mean, 'res': mean_res, 'name': '日收益率 (Return)'}
 
     # --- 2. 波動率檢定 (Levene Test) ---
     stat_var, p_val_var = stats.levene(rets_is, rets_os, center='median')
     is_std, os_std = rets_is.std(), rets_os.std()
     var_res = " 通過"
     if p_val_var < 0.05 and os_std > is_std: var_res = " 風險顯著擴大"
-    results['volatility'] = {'stat': stat_var, 'p': p_val_var, 'res': var_res, 'name': '波動率 (Volatility)'}
+    results['volatility'] = {'stat': stat_var, 'p': p_val_var, 'res': var_res, 'name': '日波動率 (Volatility)'}
 
     # --- 3. Sharpe 衰退檢定 (Lo's Statistic) ---
     z_shp, p_shp, res_shp = test_sharpe_difference(rets_is, rets_os)
     results['sharpe'] = {'stat': z_shp, 'p': p_shp, 'res': res_shp, 'name': '夏普值 (Sharpe)'}
 
-    # --- 4. IR 衰退檢定 (同 Sharpe 邏輯，但用 Active Returns) ---
+    # --- 4. IR 衰退檢定 (同 Sharpe 邏輯，用 Active Returns) ---
     z_ir, p_ir, res_ir = test_sharpe_difference(active_is, active_os)
     results['ir'] = {'stat': z_ir, 'p': p_ir, 'res': res_ir, 'name': '資訊率 (IR)'}
 
     # --- 5. IC 衰退檢定 (Fisher Z) ---
-    ic_is = adv_is.get('IC (Spearman)', 0)
-    ic_os = adv_os.get('IC (Spearman)', 0)
+    # IC 必須維持使用高頻 n_samples，所以不更動
+    ic_is = adv_is.get('IC (Sp)', 0) # 確保名稱與你修改的一致
+    ic_os = adv_os.get('IC (Sp)', 0)
     n_is = adv_is.get('n_samples', 0)
     n_os = adv_os.get('n_samples', 0)
     
@@ -236,7 +282,7 @@ def save_report_to_file(df_full, hist_is, hist_os, split_date, strategy_name):
         def w(text=""): f.write(text + "\n")
 
         w("="*60)
-        w(f"{' QUANT BRAIN 全方位體檢報告 ':^56}")
+        w(f"{' 策略報告 ':^56}")
         w("="*60)
         w(f"策略代號: {strategy_name}")
         w(f"樣本切割: {split_date}")
@@ -256,7 +302,7 @@ def save_report_to_file(df_full, hist_is, hist_os, split_date, strategy_name):
             
             w(f"{'Return':<12} | {get_fmt(basic_is, 'Total Return', True)} | {get_fmt(basic_os, 'Total Return', True)} |")
             w(f"{'Sharpe':<12} | {get_fmt(basic_is, 'Sharpe Ratio')} | {get_fmt(basic_os, 'Sharpe Ratio')} |")
-            w(f"{'IC (Sp)':<12} | {get_fmt(adv_is, 'IC (Spearman)')} | {get_fmt(adv_os, 'IC (Spearman)')} |")
+            w(f"{'IC (Sp)':<12} | {get_fmt(adv_is, 'IC (Sp)')} | {get_fmt(adv_os, 'IC (Sp)')} |")
             w(f"{'IR':<12} | {get_fmt(adv_is, 'IR')} | {get_fmt(adv_os, 'IR')} |")
             w(f"{'MaxDD':<12} | {get_fmt(basic_is, 'Max Drawdown', True)} | {get_fmt(basic_os, 'Max Drawdown', True)} |")
         else:
@@ -315,14 +361,14 @@ def plot_performance_advanced(df_full, hist_is, hist_os, split_date, strategy_na
         full_hist.set_index('datetime', inplace=True)
         full_hist['returns'] = full_hist['equity'].pct_change()
         
-        window = 24 * 30 
-        roll_mean = full_hist['returns'].rolling(window).mean()
-        roll_std = full_hist['returns'].rolling(window).std()
+        daily_hist = full_hist['equity'].resample('1D').last().dropna()
+        daily_ret = daily_hist.pct_change().dropna()
         
-        with np.errstate(divide='ignore', invalid='ignore'):
-            roll_sharpe = (roll_mean / roll_std) * np.sqrt(24*365)
+        # 改為每 30 天滾動計算一次真實的夏普
+        roll_sharpe = (daily_ret.rolling(15).mean() / daily_ret.rolling(15).std()) * np.sqrt(365)
         
-        ax2.plot(roll_sharpe.index, roll_sharpe, color='purple', linewidth=1, label='Rolling Sharpe (30D)')
+        # 然後畫圖對齊 daily_hist.index
+        ax2.plot(roll_sharpe.index, roll_sharpe, color='purple', linewidth=2, label='15D Rolling Sharpe')
         ax2.axhline(0, color='black', linewidth=0.5, linestyle='--')
         ax2.axvline(pd.to_datetime(split_date), color='red', linestyle='--', alpha=0.3)
         ax2.set_ylabel('Sharpe')
@@ -433,7 +479,9 @@ def main():
     engine.run(strategy_instance.run)
     
     full_hist = pd.DataFrame(engine.account.equity_curve)
-    
+    his=full_hist[['datetime', 'price', 'position', 'signal']]
+    his.to_csv("backtest_history_with_signals.csv", index=False, na_rep='None')
+
     if full_hist.empty:
         print("[Error] 回測結果為空 (可能完全沒有交易產生)")
         return

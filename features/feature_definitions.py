@@ -141,6 +141,71 @@ class VolAdjMom_V1(BaseFeature):
             'open_time': df['open_time'] if 'open_time' in df.columns else df.index,
             self.feature_id: np.nan_to_num(vol_adj_mom, nan=0)
         })
+    
+class realized_Vol_V1(BaseFeature):
+    """
+    Realized Volatility (已實現波動率)
+    """
+    feature_prefix = "realized_Vol"
+
+    def __init__(self, window=20, column='close'):
+        self.window = int(window)
+        self.column = column
+
+    @property
+    def feature_id(self): 
+        return f"{self.feature_prefix}_{self.window}_{self.column}_v1"
+
+    def compute(self, data_board) -> pd.DataFrame:
+        df = data_board.main_kline
+        if df is None or df.empty: 
+            return pd.DataFrame()
+        
+        # 取得目標欄位價格 (預設為 close)
+        prices = df[self.column].astype(float)
+        
+        
+        # 2. 計算波動率 (單期收益率在過去 window 期內的標準差)
+        daily_returns = prices.pct_change(periods=1)
+        volatility = daily_returns.rolling(window=self.window).std()
+        
+            
+        return pd.DataFrame({
+            'open_time': df['open_time'] if 'open_time' in df.columns else df.index,
+            self.feature_id: np.nan_to_num(volatility, nan=0)
+        })
+    
+class OimLvl1_V1(BaseFeature):
+    feature_prefix = "oim_lvl1"
+    
+    @property
+    def feature_id(self): 
+        return "oim_lvl1_v1"
+    
+    def compute(self, data_board):
+
+        df = data_board.external_data.get('bybit_oim_lvl1')
+
+        if df is None or df.empty:
+            return pd.DataFrame()
+
+        df = df.copy()
+
+        interval_ms = 60000
+
+        # timestamp normalize
+        df['bar_time'] = (df['open_time'] // interval_ms) * interval_ms
+
+        # aggregation
+        agg = (df.groupby('bar_time')['value'].agg([('mean', 'mean'),]).reset_index())
+
+        # prevent look-ahead bias
+        agg['bar_time'] += interval_ms
+
+        return pd.DataFrame({
+            'open_time': agg['bar_time'],
+            self.feature_id: agg['mean']
+        })
 # ==========================================
 # 1. 基礎價量與波動率因子
 # ==========================================

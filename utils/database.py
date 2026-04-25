@@ -260,21 +260,25 @@ class DatabaseHandler:
     def load_market_data(self, symbol, interval, limit=200):
         """ 讀取 K 線數據 """
         try:
-            
-            query = f'''
+            query = '''
                 SELECT open_time, open, high, low, close, volume, close_time
                 FROM market_data
                 WHERE symbol = ? AND interval = ?
                 ORDER BY open_time DESC
-                LIMIT ?
             '''
+            params = [symbol, interval]
             
-            df = pd.read_sql(query, self.conn, params=(symbol, interval, limit))
+            # 如果有設定 limit，才加上 LIMIT 語法
+            if limit is not None:
+                query += " LIMIT ?"
+                params.append(limit)
+                
+            df = pd.read_sql(query, self.conn, params=tuple(params))
             
             if df.empty:
                 return pd.DataFrame()
 
-            # 排序回來 (ASC)
+            # 排序回來 (ASC)，因為前面用 DESC 取最新資料，需轉回時間正序
             df = df.sort_values('open_time').reset_index(drop=True)
             
             # 確保數值型別
