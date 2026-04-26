@@ -151,7 +151,7 @@ class PerformanceAnalyzer:
     def get_advanced_metrics(self):
         if self.hist.empty: return {}
         # IC
-        pos = self.hist['position']
+        pos = self.hist['signal']
         
         # [專業修正] 高頻數據只看未來 1 分鐘 (shift(-1)) 雜訊太大
         # 建議根據你的平均持倉時間來設定，例如看未來 15 分鐘的累積報酬
@@ -166,7 +166,6 @@ class PerformanceAnalyzer:
         ic_sp = 0
         if not valid.empty and valid['pos'].std() != 0:
             ic_sp = valid['pos'].corr(valid['ret'], method='spearman')
-        # IR (Information Ratio)
     
         # IR (Information Ratio) - 降頻至日線 (與 Sharpe 同步)
         # 抽出每日的權益與 Benchmark 快照

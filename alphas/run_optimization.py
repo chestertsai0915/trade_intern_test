@@ -80,14 +80,14 @@ def run_optuna_search(env, search_space, n_trials=100, use_genetic=False):
 # 主程式 (統一控制中心)
 # ==========================================
 def main():
-    strategy_file = "alphas/alpha_take_home_3.py"
+    strategy_file = "alphas/alpha_take_home_4.py"
     
     # ==========================================
     # 在這裡寫死你要的最佳化回測時間
     # ==========================================
-    start_date = "2026-03-25"   # 例如: "2024-01-01" (設為 None 則不限制)
+    start_date = "2025-03-29"   # 例如: "2024-01-01" (設為 None 則不限制)
     end_date   = "2026-03-29"   # 整個樣本的結束日
-    split_date = "2026-03-29" # "2026-03-19"   # 樣本外切分點 (最佳化只會使用 split_date 之前的資料進行訓練)
+    split_date = "2025-12-09" # "2026-03-19"   # 樣本外切分點 (最佳化只會使用 split_date 之前的資料進行訓練)
 
     # 傳入所有參數，包含改為 1m 與目標 Symbol
     env = ResearchEnvironment(
@@ -110,14 +110,29 @@ def main():
     }
     """
     search_space = {
-       "oim_smooth": {"type": "categorical", "choices": [3, 5, 10, 20, 30]},
-        
-        # 背景基準 (過去 1 小時 vs 2 小時 vs 4 小時)
-        "zscore_window": {"type": "categorical", "choices": [60, 120, 240]},
-        
-        # 死區大小：決定了策略的交易頻率 (0.5 代表 tanh 必須超過 0.5 才開倉)
-        "dead_zone": {"type": "categorical", "choices": [0.2, 0.4, 0.6, 0.8]}
-
+        "mom_smooth_window":  {"type": "categorical", "choices": [75]},    # 訊號平滑窗口
+        "quantile_window":  {"type": "categorical", "choices": [500]},      # 分位數計算窗口
+        "zscore_window":  {"type": "categorical", "choices": [50]},          # z-score 計算窗口
+        "second_factor_window":  {"type": "categorical", "choices": [75]},     # 第二因子平滑窗口
+        "quantile":  {"type": "float", "low": 0.1, "high": 0.9, "step": 0.1},
+       "factor_x": {
+            "type": "categorical", 
+            "choices": [       
+                "vol_adj_mom_20_close_v1",  
+                "vol_adj_mom_5_close_v1",
+                "vol_adj_mom_40_close_v1",
+                "vol_adj_mom_60_close_v1",
+                "vol_adj_mom_80_close_v1",
+                "vol_adj_mom_100_close_v1",
+                "vol_adj_mom_150_close_v1",
+                "vol_adj_mom_200_close_v1",
+                "vol_adj_mom_300_close_v1",
+                "vol_adj_mom_500_close_v1",
+                "vol_adj_mom_800_close_v1",
+                "vol_adj_mom_1000_close_v1",
+                "vol_adj_mom_1500_close_v1"
+            ]
+        }
     }
 
 

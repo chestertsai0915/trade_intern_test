@@ -51,8 +51,10 @@ class BacktestDataFactory:
         for source, metrics in metrics_map.items():
             dfs = []
             for metric in metrics:
-                if source in ['funding_rate', 'bybit_oim_lvl1']:
+                if source in ['funding_rate']:
                     target_symbol = "BTCUSDT"
+                elif source == 'bybit_oim_lvl1':
+                    target_symbol = "BYBIT_BTCUSDT"
                 else:
                     target_symbol = "GLOBAL"
                 df = self.db.load_external_data(target_symbol, metric, start_time=start_time, limit=default_limit)
