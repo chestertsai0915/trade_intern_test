@@ -34,32 +34,19 @@ def run_fill_external_data(source, symbol, metric, interval, start_time, end_tim
     )
 
     # 3. 呼叫外部數據專用的補齊函數
-    filler.check_and_fill_external(start_date=start_time, end_date=end_time)
+    filler.check_and_fill_event_driven(start_date=start_time, end_date=end_time)
     print("=== 任務執行結束 ===\n")
 
 if __name__ == "__main__":
     
-
-    
-    """
-    run_fill_external_data(
-        source="bybit",
-        symbol="BTCUSDT",
-        metric="funding_rate_bybit",       # DB 裡的 metric 名稱 (您可以自訂)
-        interval="8h",               # 資金費率固定為 8 小時
-        start_time="2025-03-29 00:00:00" ,
-        end_time="2026-03-29 00:00:00",
-        api_limit=200                # Bybit API 限制一次最多 200 筆
-    )
-    """
     #抓取 Binance 的資金費率
     run_fill_external_data(
         source="binance",
         symbol="BTCUSDT",
         metric="funding_rate",
-        interval="8h",
+        interval="dynamic",
         start_time="2025-03-29 00:00:00" ,
         end_time="2026-03-29 00:00:00",
-        api_limit=200             # Binance API 限制一次最多 200 筆
+        api_limit=200             #  API 限制一次最多 200 以免
     )
     

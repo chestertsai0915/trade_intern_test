@@ -102,9 +102,8 @@ class PerformanceAnalyzer:
         self.benchmark_returns = self.benchmark.pct_change().reindex(self.hist.index).fillna(0)
         self.hist['active_returns'] = self.hist['returns'] - self.benchmark_returns
 
-        # ==========================================
         # [新增] 準備「日頻」數據，專供風險指標與統計檢定使用
-        # ==========================================
+      
         daily_equity = self.hist['equity'].resample('1D').last().dropna()
         daily_bench = self.benchmark.resample('1D').last().dropna()
         
@@ -125,9 +124,6 @@ class PerformanceAnalyzer:
         roll_max = self.hist['equity'].cummax()
         dd = (self.hist['equity'] - roll_max) / roll_max
         max_dd = dd.min()
-        
-       
-       
 
         daily_equity = self.hist['equity'].resample('1D').last().dropna()
         
@@ -135,8 +131,7 @@ class PerformanceAnalyzer:
         daily_returns = daily_equity.pct_change().dropna()
 
         # 3. 以日報酬計算年化標準差與夏普 (乘數統一為 365)
-        std_daily = daily_returns.std()
-        
+        std_daily = daily_returns.std()  
         sharpe = 0
         if std_daily != 0:
             sharpe = (daily_returns.mean() / std_daily) * np.sqrt(365)
@@ -148,58 +143,81 @@ class PerformanceAnalyzer:
             "Vol (Ann.)": std_daily * np.sqrt(365)
         }
 
-    def get_advanced_metrics(self):
+    def find_optimal_n(self, periods=[1, 3, 5, 10, 15, 20], threshold_ratio=0.9):
+        """
+        [新增] 尋找 IC 衰退前的平台期 (Sweet Spot N)
+        邏輯：計算各週期的 IC 絕對值，找出最高點後，往下挑選能維持在最高點 90% 以上的「最大期數 n」
+        """
+        if self.hist.empty: return 15
+        pos = self.hist['signal']
+        ic_dict = {}
+        
+        for n in periods:
+            # 計算未來 N 期的累積報酬
+            future_ret = self.benchmark.shift(-n) / self.benchmark - 1
+            valid = pd.DataFrame({'pos': pos, 'ret': future_ret}).dropna()
+            
+            if not valid.empty and valid['pos'].std() != 0:
+                ic = valid['pos'].corr(valid['ret'], method='spearman')
+                ic_dict[n] = abs(ic)
+            else:
+                ic_dict[n] = 0
+                
+        if not ic_dict: return 15
+        
+        # 找出最高的 IC 絕對值
+        max_ic = max(ic_dict.values())
+        if max_ic == 0: return 15
+        
+        # 定義平台期的門檻 (例如維持在最高 IC 的 90% 以上)
+        threshold = max_ic * threshold_ratio
+        
+        # 找出所有大於等於門檻的 n，並挑選其中最大的一個 (爭取最長持倉時間)
+        valid_ns = [n for n, ic in ic_dict.items() if ic >= threshold]
+        optimal_n = max(valid_ns) if valid_ns else 15
+        
+        return optimal_n
+
+    def get_advanced_metrics(self, forward_period=15):
+        """
+        [修改] 接收外部傳入的 forward_period (甜蜜點 n) 來計算 IC 與 IR
+        """
         if self.hist.empty: return {}
         # IC
         pos = self.hist['signal']
         
-        # [專業修正] 高頻數據只看未來 1 分鐘 (shift(-1)) 雜訊太大
-        # 建議根據你的平均持倉時間來設定，例如看未來 15 分鐘的累積報酬
-        forward_period = 15 
-        
         # 計算未來 N 期的累積報酬 (Future Return)
-        # 這裡用 benchmark 價格作為標的資產價格
         future_ret = self.benchmark.shift(-forward_period) / self.benchmark - 1
-        
         valid = pd.DataFrame({'pos': pos, 'ret': future_ret}).dropna()
         
         ic_sp = 0
         if not valid.empty and valid['pos'].std() != 0:
             ic_sp = valid['pos'].corr(valid['ret'], method='spearman')
-    
-        # IR (Information Ratio) - 降頻至日線 (與 Sharpe 同步)
-        # 抽出每日的權益與 Benchmark 快照
-        daily_equity = self.hist['equity'].resample('1D').last().dropna()
-        daily_bench = self.benchmark.resample('1D').last().dropna()
-        
-        # 對齊 index 確保長度一致
-        common_idx = daily_equity.index.intersection(daily_bench.index)
-        daily_equity = daily_equity.loc[common_idx]
-        daily_bench = daily_bench.loc[common_idx]
+        ic_sp = abs(ic_sp)  # 我們關心絕對值，因為反向的預測力也是有價值的
+        # 計算 IC IR (Factor IR)
+        def calc_daily_ic(df):
+            if len(df) > 1 and df['pos'].std() != 0:
+                return df['pos'].corr(df['ret'], method='spearman')
+            return np.nan
 
-        # 計算日報酬
-        daily_ret = daily_equity.pct_change().dropna()
-        daily_bench_ret = daily_bench.pct_change().dropna()
+        daily_ic = valid.groupby(valid.index.date).apply(calc_daily_ic).dropna()
         
-        # 計算日主動報酬 (Active Return)
-        daily_active_ret = daily_ret - daily_bench_ret
-        
-        tracking_err = daily_active_ret.std()
         ir = 0
-        if tracking_err != 0:
-            ir = (daily_active_ret.mean() / tracking_err) * np.sqrt(365)
+        if not daily_ic.empty and daily_ic.std() != 0:
+            # IC IR = (IC 平均 / IC 標準差) * 年化常數
+            ir = (daily_ic.mean() / daily_ic.std()) * np.sqrt(365)
 
         return {
             f"IC (Sp)": ic_sp,
-            "IR": ir,
-            "n_samples": len(valid) # 用於 IC 檢定
+            "IR": ir, 
+            "n_samples": len(valid) 
         }
 
 
 
 # 3. 完整健檢邏輯 
 
-def perform_robustness_check(hist_is, hist_os, benchmark_series):
+def perform_robustness_check(hist_is, hist_os, benchmark_series, optimal_n):
     """
     執行完整的衰退檢定 (Return, Sharpe, IC, IR, Volatility)
     """
@@ -208,8 +226,8 @@ def perform_robustness_check(hist_is, hist_os, benchmark_series):
     analyzer_is = PerformanceAnalyzer(hist_is, benchmark_series)
     analyzer_os = PerformanceAnalyzer(hist_os, benchmark_series)
     
-    adv_is = analyzer_is.get_advanced_metrics()
-    adv_os = analyzer_os.get_advanced_metrics()
+    adv_is = analyzer_is.get_advanced_metrics(forward_period=optimal_n)
+    adv_os = analyzer_os.get_advanced_metrics(forward_period=optimal_n)
 
     # ==========================================
     # [修正] 取得日頻序列 (Series)，進行真實時間尺度的統計檢定
@@ -264,18 +282,26 @@ def save_report_to_file(df_full, hist_is, hist_os, split_date, strategy_name):
     filename = f"report_{strategy_name}.txt"
     benchmark_series = df_full.set_index('datetime')['close']
 
-    # 計算基礎指標
+    # --- 計算樣本內數據與提取甜蜜點 ---
     analyzer_is = PerformanceAnalyzer(hist_is, benchmark_series)
     basic_is = analyzer_is.get_basic_metrics()
-    adv_is = analyzer_is.get_advanced_metrics()
+    
+    # 1. 從 IS 數據萃取甜蜜點 (Sweet Spot N)
+    optimal_n = analyzer_is.find_optimal_n(periods=[1, 3, 5, 10, 15, 20], threshold_ratio=0.9)
+    
+    # 2. 根據算出來的 optimal_n 重新計算 IS 的進階指標
+    adv_is = analyzer_is.get_advanced_metrics(forward_period=optimal_n)
 
     has_os = not hist_os.empty
     if has_os:
         analyzer_os = PerformanceAnalyzer(hist_os, benchmark_series)
         basic_os = analyzer_os.get_basic_metrics()
-        adv_os = analyzer_os.get_advanced_metrics()
         
-        checks = perform_robustness_check(hist_is, hist_os, benchmark_series)
+        # 3. 樣本外 (OS) 強制綁定從 IS 找出的 optimal_n
+        adv_os = analyzer_os.get_advanced_metrics(forward_period=optimal_n)
+        
+        # 4. 將 optimal_n 傳給檢定器
+        checks = perform_robustness_check(hist_is, hist_os, benchmark_series, optimal_n)
 
     with open(filename, "w", encoding="utf-8") as f:
         def w(text=""): f.write(text + "\n")

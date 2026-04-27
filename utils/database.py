@@ -14,11 +14,11 @@ class DatabaseHandler:
         # =建立持久連線，並允許跨執行緒存取
         self.conn = sqlite3.connect(self.db_path, check_same_thread=False)
         
-        # 為了保險起見，開啟 WAL 模式 (Write-Ahead Logging)，提升併發讀寫效能
+        # 開啟 WAL 模式 (Write-Ahead Logging)，提升併發讀寫效能
         self.conn.execute("PRAGMA journal_mode=WAL;")
         
         self._init_tables()
-        # [修改] 只有當 skip_backup=False 時才備份
+        # 只有當 skip_backup=False 時才備份
         if not skip_backup:
             self._backup_on_startup()
         
@@ -134,7 +134,7 @@ class DatabaseHandler:
         """
         try:
             cursor = self.conn.cursor()
-            # SQL 魔法：直接撈出過去 N 天的 PnL 總和
+   
             query = '''
                 SELECT strategy, SUM(realized_pnl)
                 FROM trades
@@ -190,9 +190,7 @@ class DatabaseHandler:
             cursor = self.conn.cursor()
             df_to_save = df.copy()
             # 將 DataFrame 轉為 list of tuples，準備寫入
-            # 假設 df 的欄位順序是: open_time, open, high, low, close, volume, close_time
-            # (這取決於你的 DataLoader 怎麼整理，這裡做個防呆處理)
-            # 3. 欄位名稱標準化 (Mapping)
+            # 欄位名稱標準化 (Mapping)
             # 你的 DataLoader 可能把時間叫做 'timestamp', 'date', 'Date', 'index' 等等
             # 我們統一改成 'open_time'
             if 'open_time' not in df_to_save.columns:
@@ -218,8 +216,8 @@ class DatabaseHandler:
             if not pd.api.types.is_datetime64_any_dtype(df_to_save['open_time']):
                 df_to_save['open_time'] = pd.to_datetime(df_to_save['open_time'])
 
-            # 將 datetime64[ns] (奈秒) 轉成 int64 (奈秒)，再除以 1,000,000 變成 毫秒
-            #這行指令會瞬間把整欄轉成乾淨的整數 (int)
+            # 將 datetime64[ns] 轉成 int64 ，再除以 1,000,000 變成 毫秒
+            #這行指令會把整欄轉成乾淨的整數
             df_to_save['open_time'] = df_to_save['open_time'].astype('int64') // 10**6
 
             # 處理 close_time (如果有)
@@ -278,7 +276,7 @@ class DatabaseHandler:
             if df.empty:
                 return pd.DataFrame()
 
-            # 排序回來 (ASC)，因為前面用 DESC 取最新資料，需轉回時間正序
+        
             df = df.sort_values('open_time').reset_index(drop=True)
             
             # 確保數值型別
@@ -291,7 +289,7 @@ class DatabaseHandler:
             logging.error(f" [DB ERROR] 讀取市場數據失敗: {e}")
             return pd.DataFrame()
         
-    #  新增：儲存外部數據的方法
+    #  儲存外部數據
     def save_generic_external_data(self, df):
         """
         通用的儲存函數
@@ -303,7 +301,7 @@ class DatabaseHandler:
         
             cursor= self.conn.cursor()
             
-            # 確保型態正確
+  
             # 時間轉 int
             if not pd.api.types.is_integer_dtype(df['open_time']):
                  # 如果是 timestamp object
@@ -313,7 +311,7 @@ class DatabaseHandler:
                      # 如果是 float 或 string
                      df['open_time'] = df['open_time'].astype('int64')
 
-            # 準備數據 (轉成 list of tuples)
+
             # 注意順序要對應 SQL
             data_to_insert = list(df[['open_time', 'symbol', 'metric', 'value']].itertuples(index=False, name=None))
 

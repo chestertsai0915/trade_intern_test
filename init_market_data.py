@@ -57,7 +57,7 @@ if __name__ == "__main__":
    
     TARGET_SOURCE = "binance"               # "binance" 或 "bybit"
     TARGET_SYMBOL = "BTCUSDT" 
-    TARGET_INTERVAL = "1m"                # 維持通用的 1m 格式
+    TARGET_INTERVAL = "1m"                # 時間格式格式
     START_TIME = "2025-03-29 00:00:00" 
     END_TIME   = "2026-04-20 00:00:00" 
     

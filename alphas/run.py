@@ -42,9 +42,9 @@ def main():
     # ==========================================
     # 在這裡寫死你要的回測時間 (若不限制請填 None 或 "")
     # ==========================================
-    start_date = "2025-07-29"   # 例如: "2024-01-01"
+    start_date = "2026-03-25"   # 例如: "2024-01-01"
     end_date   = "2026-03-29"   # 例如: "2025-01-01"
-    split_date = None         # 若設為 None，brain.py 會自動切在 70% 處
+    split_date = "2026-03-29"        # 若設為 None，brain.py 會自動切在 70% 處
 
     strategy_path = os.path.join(alphas_dir, selected_file)
     print(f"\n>> 正在啟動策略回測: {selected_file} ...\n")

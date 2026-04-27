@@ -14,10 +14,8 @@ class Binance_orderbookFetcher(BaseDataSource):
 
     def fetch_data(self, symbol, limit=5):
         try:
-            # 呼叫 UMFutures SDK 的 depth 方法，設定 limit 來限制檔位數量
             depth_data = self.client.depth(symbol=symbol, limit=limit)
             
-            # 幣安回傳的 bids 與 asks 格式皆為: [[價格字串, 數量字串], [價格字串, 數量字串]...]
             bids = depth_data.get('bids', [])
             asks = depth_data.get('asks', [])
             

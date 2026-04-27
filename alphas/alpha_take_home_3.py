@@ -34,8 +34,8 @@ class Strategy(BaseAlpha):
         # 最原始的本能：買盤大於賣盤 (>0) 就做多，賣盤大於買盤 (<0) 就做空
         # ==========================================
         if oim_val < -threshold:
-            return 0.99  # 滿倉做空
+            return 0.99  
         elif oim_val > threshold:
-            return -0.99  # 滿倉做多
+            return -0.99 
         else:
             return None

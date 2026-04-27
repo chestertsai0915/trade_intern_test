@@ -94,9 +94,8 @@ class RawKlineColumn(BaseFeature):
         })
     
 
-# ==========================================
+
 # 1. take home test要求因子
-# ==========================================
 class VolAdjMom_V1(BaseFeature):
     """
     Volatility-Adjusted Momentum (夏普型動量)
@@ -117,11 +116,9 @@ class VolAdjMom_V1(BaseFeature):
         if df is None or df.empty: 
             return pd.DataFrame()
         
-        # 取得目標欄位價格 (預設為 close)
         prices = df[self.column].astype(float)
         
         # 1. 計算過去 window 期的累積收益率 (n-period return)
-        # 也就是 (今日價格 - n天前價格) / n天前價格
         period_returns = prices.pct_change(periods=self.window)
         
         # 2. 計算波動率 (單期收益率在過去 window 期內的標準差)
@@ -129,7 +126,7 @@ class VolAdjMom_V1(BaseFeature):
         volatility = daily_returns.rolling(window=self.window).std()
         
         # 3. 波動率調整後的動量 (收益率 / 波動率)
-        # 如果波動率為 0 (例如橫盤死水)，為避免除以 0 導致無限大或 NaN，使用 np.where 保護
+        #為避免除以 0 
         with np.errstate(divide='ignore', invalid='ignore'):
             vol_adj_mom = np.where(
                 (volatility == 0) | (volatility.isna()), 

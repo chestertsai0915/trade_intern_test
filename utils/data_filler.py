@@ -97,8 +97,6 @@ class DataGapFiller:
         expected_ts = set(expected_dates.astype('int64') // 10**6)
 
         interval_ms = self._get_interval_ms()
-
-        # 針對 external_data 表格下 SQL 查詢
         try:
             cursor = self.db.conn.cursor()
             cursor.execute('''
@@ -108,8 +106,6 @@ class DataGapFiller:
             
             raw_existing_ts = set(row[0] for row in cursor.fetchall())
             
-            # 【關鍵修復 1】容錯對齊 (Snapping)
-            # 將資料庫撈出的時間四捨五入對齊到標準網格 (例如 8h)，消除 API 結算延遲的毫秒誤差
             existing_ts = set(round(ts / interval_ms) * interval_ms for ts in raw_existing_ts)
             
         except Exception as e:
@@ -137,8 +133,6 @@ class DataGapFiller:
             chunks.append((current_chunk[0], current_chunk[-1]))
 
         for start_ts, end_ts in chunks:
-            # 【關鍵修復 2】放大抓取視窗
-            # 加上 interval_ms - 1，給 API 一個完整的「尋找區間」(例如 08:00:00 到 15:59:59)
             window_end_ts = end_ts + interval_ms - 1
             
             print(f"下載缺失區塊: {pd.to_datetime(start_ts, unit='ms')} -> {pd.to_datetime(window_end_ts, unit='ms')}")
@@ -160,7 +154,74 @@ class DataGapFiller:
             time.sleep(0.5) 
             
         print(f"[{self.metric}] 所有缺失資料補齊完畢！\n")
+    def check_and_fill_event_driven(self, start_date, end_date):
+        """
+        專為「可能改變結算頻率」的外部數據 (如資金費率) 設計的游標分頁抓取法
+        """
+        if not self.metric:
+            print("錯誤：執行此方法必須提供 metric 參數！")
+            return
 
+        print(f"開始以游標模式(Cursor-based)補齊 {self.db_symbol} ({self.metric}) 從 {start_date} 到 {end_date} ...")
+
+        # 將起訖時間轉為毫秒整數
+        start_ts = int(pd.to_datetime(start_date).timestamp() * 1000)
+        end_ts = int(pd.to_datetime(end_date).timestamp() * 1000)
+
+        # 先查資料庫，看該區間最後一筆資料的時間，從那裡接續抓
+        try:
+            cursor = self.db.conn.cursor()
+            cursor.execute('''
+                SELECT MAX(timestamp) FROM external_data 
+                WHERE symbol = ? AND metric = ? AND timestamp >= ? AND timestamp <= ?
+            ''', (self.db_symbol, self.metric, start_ts, end_ts))
+            result = cursor.fetchone()
+            
+            # 如果資料庫已經有部分資料，就從資料庫最後一筆的下一個毫秒開始抓
+            if result and result[0]:
+                current_start_ts = int(result[0]) + 1
+            else:
+                current_start_ts = start_ts
+                
+        except Exception as e:
+            print(f"查詢 external_data 發生錯誤: {e}")
+            current_start_ts = start_ts
+
+        # 如果已經抓好抓滿，就結束
+        if current_start_ts >= end_ts:
+            print(f"[{self.metric}] 區間資料已達最新，無須補齊。\n")
+            return
+
+        print(f"開始從 {pd.to_datetime(current_start_ts, unit='ms')} 推進抓取...")
+
+        # 核心邏輯：不斷向前推進，不依賴固定 interval
+        while current_start_ts < end_ts:
+            df_new = self.fetch_func(
+                symbol=self.api_symbol, 
+                limit=self.api_limit,
+                startTime=current_start_ts,
+                endTime=end_ts
+            )
+
+            if df_new.empty:
+                print("  抓取完畢，已無更多資料。")
+                break
+                
+            df_new['symbol'] = self.db_symbol
+            
+            # 寫入資料庫 (您現有的通用儲存法)
+            self.db.save_generic_external_data(df_new)
+            
+            # 取得這批資料的「最大時間戳」，作為下一次的起點
+            max_fetched_ts = int(df_new['open_time'].max())
+            print(f"  └─ 成功寫入 {len(df_new)} 筆，推進至 {pd.to_datetime(max_fetched_ts, unit='ms')}")
+            
+            # 【推進游標】下一批從這批的最後一筆 + 1毫秒開始
+            current_start_ts = max_fetched_ts + 1
+            
+            time.sleep(0.5) # 防止觸發 Rate Limit
+            
+        print(f"[{self.metric}] 所有區段資料補齊完畢！\n")
    
     # 3. 僅檢查不下載 
     
